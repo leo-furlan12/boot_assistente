@@ -3,13 +3,13 @@ const mysql = require('mysql2/promise');
 
 let pool;
 
-// 1. Inicializa o pool de conexões puxando TUDO do arquivo .env com segurança
+// Conexão e criação de tabelas (mantido como antes, com data_gasto)
 async function conectarBanco() {
     try {
         pool = mysql.createPool({
             host: process.env.DB_HOST || 'localhost',
             user: process.env.DB_USER || 'leo_bot',
-            password: process.env.DB_PASS, // 🔒 PUXA DA .ENV (SEM SENHA EXPOSTA AQUI!)
+            password: process.env.DB_PASS,
             database: process.env.DB_NAME || 'boot_assistente',
             waitForConnections: true,
             connectionLimit: 5,
@@ -18,12 +18,12 @@ async function conectarBanco() {
 
         console.log('🗄️ Conexão com o MariaDB configurada com sucesso!');
         await criarTabelaGastos();
+        await garantirColunaDataGasto();
     } catch (err) {
         console.error('❌ Erro ao conectar no MariaDB:', err.message);
     }
 }
 
-// 2. Cria a tabela de gastos exatamente com os campos que você pediu
 async function criarTabelaGastos() {
     try {
         await pool.query(`
@@ -36,20 +36,74 @@ async function criarTabelaGastos() {
                 data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        console.log('✨ Tabela de GASTOS verificada/criadas no banco!');
+        console.log('✨ Tabela de GASTOS verificada/criada no banco!');
     } catch (err) {
         console.error('❌ Erro ao criar tabela de gastos:', err.message);
     }
 }
 
-// Inicializa a checagem do banco na hora que o bot puxar o arquivo
+async function garantirColunaDataGasto() {
+    try {
+        const [rows] = await pool.query(`
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = 'gastos' 
+              AND COLUMN_NAME = 'data_gasto'
+              AND TABLE_SCHEMA = ?
+        `, [process.env.DB_NAME || 'boot_assistente']);
+
+        if (rows.length === 0) {
+            await pool.query(`ALTER TABLE gastos ADD COLUMN data_gasto DATE AFTER valor`);
+            console.log('✅ Coluna data_gasto adicionada com sucesso!');
+        }
+    } catch (err) {
+        console.error('❌ Erro ao verificar/criar coluna data_gasto:', err.message);
+    }
+}
+
 conectarBanco();
 
-// 3. Exporta a função que vai salvar os seus gastos no banco de dados
 module.exports = {
-    salvarGasto: async (whatsappId, nome, tipo, valor) => {
-        const sql = `INSERT INTO gastos (whatsapp_id, nome, tipo, valor) VALUES (?, ?, ?, ?)`;
-        const [result] = await pool.execute(sql, [whatsappId, nome, tipo, valor]);
+    salvarGasto: async (whatsappId, nome, tipo, valor, dataGasto = null) => {
+        const dataFinal = dataGasto || new Date().toISOString().slice(0, 10);
+        const sql = `INSERT INTO gastos (whatsapp_id, nome, tipo, valor, data_gasto) VALUES (?, ?, ?, ?, ?)`;
+        const [result] = await pool.execute(sql, [whatsappId, nome, tipo, valor, dataFinal]);
         return result.insertId;
+    },
+
+    // Função de consulta melhorada: aceita filtro de categoria e mês/ano, ordena do mais antigo para o mais novo
+    puxarGastos: async (whatsappId, categoria = null, mes = null, ano = null) => {
+        let sql = `SELECT nome, tipo, valor, DATE_FORMAT(data_gasto, '%d/%m/%Y') as data_formatada 
+                   FROM gastos WHERE whatsapp_id = ?`;
+        const params = [whatsappId];
+
+        // Filtro de categoria (opcional)
+        if (categoria && categoria !== 'todos' && categoria !== '') {
+            sql += ` AND tipo = ?`;
+            params.push(categoria);
+        }
+
+        // Filtro de mês/ano (opcional) – ex: mês=4, ano=2026
+        if (mes && ano) {
+            const primeiroDia = `${ano}-${String(mes).padStart(2, '0')}-01`;
+            sql += ` AND data_gasto >= ? AND data_gasto <= LAST_DAY(?)`;
+            params.push(primeiroDia, primeiroDia); // primeiro parâmetro para >=, segundo para LAST_DAY
+        }
+
+        sql += ` ORDER BY data_gasto ASC, id ASC`;  // Mais antigo primeiro
+        const [rows] = await pool.execute(sql, params);
+        return rows;
+    },
+
+    deletarGasto: async (whatsappId, nome, valor) => {
+        const sql = `DELETE FROM gastos WHERE whatsapp_id = ? AND nome = ? AND valor = ?`;
+        const [result] = await pool.execute(sql, [whatsappId, nome, parseFloat(valor)]);
+        return result.affectedRows;
+    },
+
+    deletarTodosGastos: async (whatsappId) => {
+        const sql = `DELETE FROM gastos WHERE whatsapp_id = ?`;
+        const [result] = await pool.execute(sql, [whatsappId]);
+        return result.affectedRows;
     }
 };
