@@ -1,11 +1,12 @@
-// Carrega as variáveis do arquivo .env antes de tudo
+// 1. Carrega as variáveis do arquivo .env antes de qualquer outra coisa
 require('dotenv').config();
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const { GoogleGenAI } = require('@google/genai');
+const { GoogleGenAI, Type } = require('@google/genai'); 
+const db = require('./database'); // Importa o seu arquivo database.js do MariaDB
 
-// Inicializa o cliente apontando para o Chromium do seu Arch Linux
+// 2. Inicializa o cliente apontando para o Chromium do seu Arch Linux
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -14,67 +15,104 @@ const client = new Client({
     }
 });
 
-// 🔒 PUXA AS CONFIGURAÇÕES SEGURAS DO ARQUIVO .ENV
+// Puxa as configurações e as travas de segurança do seu arquivo oculto .env
 const MEU_NUMERO_PESSOAL = process.env.MEU_NUMERO_PESSOAL;
 const MEU_ID_MASCARADO   = process.env.MEU_ID_MASCARADO;
 const GEMINI_API_KEY     = process.env.GEMINI_API_KEY;
 
-// Inicializa a IA com a chave puxada do ambiente seguro
+// Inicializa a inteligência do Google com a sua chave
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-// ... O restante do código abaixo (client.on('qr'), client.on('message'), etc.) continua exatamente IGUAL ao anterior.
-
-// Exibe o QR Code no terminal se precisar de um novo login
+// Exibe o QR Code no terminal se a sessão expirar
 client.on('qr', (qr) => {
     qrcode.generate(qr, { small: true });
     console.log('✨ Escaneie o QR Code acima com o seu número do BOT!');
 });
 
-// Mensagem de sucesso quando o login for concluído
 client.on('ready', () => {
-    console.log('🚀 O seu assistente com IA está online e pronto!');
+    console.log('🚀 O seu assistente de gastos está online e pronto!');
 });
 
-// 🤖 MODO DE DOIS NÚMEROS: Escuta as mensagens recebidas
+// 🤖 O CORAÇÃO DO BOT: Escuta e filtra as mensagens recebidas
 client.on('message', async (msg) => {
-    // Printa no terminal o que você enviou para acompanhar o fluxo [cite: 92]
     console.log(`[WhatsApp]: Mensagem de ${msg.from} | Texto: ${msg.body}`);
 
-    // 🔒 TRAVA DE SEGURANÇA: Só responde se a mensagem vier de você [cite: 98]
+    // 🔒 TRAVA DE SEGURANÇA MÁXIMA: Só responde se a mensagem vier de você
     if (msg.from === MEU_NUMERO_PESSOAL || msg.from === MEU_ID_MASCARADO) {
         
         try {
-            // Avisa o WhatsApp que o bot está "digitando..." para dar realismo
             const chat = await msg.getChat();
-            await chat.sendStateTyping();
+            await chat.sendStateTyping(); // Simula o "digitando..." para dar realismo
 
-            // 🧠 O Promt de Sistema: Aqui definimos a personalidade do bot!
+            // Orientação do sistema moldando o comportamento do robô
             const promptDoSistema = 
-                "Você é o robô assistente pessoal do Leo, rodando localmente no Arch Linux dele. " +
-                "Seja prestativo, inteligente, direto ao ponto e use um tom amigável e focado. " +
-                "Nas próximas etapas você irá gerenciar as finanças e tarefas dele.";
+                "Você é o assistente pessoal e financeiro do Leo. " +
+                "Sua tarefa é analisar a mensagem dele. Se ele estiver apenas conversando, cumprimentando ou fazendo perguntas gerais, responda amigavelmente no campo 'respostaConversa' e defina 'eGasto' como false. " +
+                "Se ele descrever um gasto (ex: 'ifood de comida 50 reais'), extraia os dados nos campos correspondentes, defina 'eGasto' como true e deixe 'respostaConversa' em branco.";
 
-            // Chama o modelo Gemini 2.5 Flash enviando a mensagem do WhatsApp [cite: 194]
+            // Molde do JSON estruturado que exigimos da IA
+            const schemaDeGastos = {
+                type: Type.OBJECT,
+                properties: {
+                    eGasto: { type: Type.BOOLEAN, description: "Defina como true se a mensagem for estritamente o registro de um gasto. Defina como false se for apenas uma conversa, saudação ou pergunta." },
+                    nome: { type: Type.STRING, description: "O nome do local ou produto comprado. Preencha apenas se eGasto for true. Ex: ifood, posto, mercado." },
+                    tipo: { type: Type.STRING, description: "A categoria do gasto. Preencha apenas se eGasto for true. Ex: comida, combustivel, lazer." },
+                    valor: { type: Type.NUMBER, description: "O valor numérico puro do gasto. Preencha apenas se eGasto for true." },
+                    respostaConversa: { type: Type.STRING, description: "Se eGasto for false, escreva aqui uma resposta natural, amigável e direta para o Leo." }
+                },
+                required: ["eGasto"], // Obriga a IA a decidir primeiro se é um gasto ou não
+            };
+
+            // Dispara para o Gemini 2.5 Flash processar o texto
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: msg.body,
                 config: {
-                    systemInstruction: promptDoSistema
+                    systemInstruction: promptDoSistema,
+                    responseMimeType: "application/json",
+                    responseSchema: schemaDeGastos,
                 }
             });
 
-            // Responde diretamente para você no WhatsApp com o texto gerado pela IA!
-            await msg.reply(response.text);
+            // Converte o texto da IA em dados usáveis pelo Node
+            const analiseIA = JSON.parse(response.text);
+            console.log('🧠 Geminaldo analisou a mensagem:', analiseIA);
+
+            // 🔀 DECISÃO: É para salvar no banco ou trocar ideia?
+            if (analiseIA.eGasto) {
+                
+                // 🗄️ Salva na sua tabela do MariaDB chamando a função do database.js
+                await db.salvarGasto(
+                    msg.from, 
+                    analiseIA.nome, 
+                    analiseIA.tipo, 
+                    analiseIA.valor
+                );
+
+                // Manda a confirmação bonita no seu WhatsApp
+                await msg.reply(
+                    `💰 *Gasto Anotado!*\n\n` +
+                    `• *Local:* ${analiseIA.nome}\n` +
+                    `• *Categoria:* ${analiseIA.tipo}\n` +
+                    `• *Valor:* R$ ${Number(analiseIA.valor).toFixed(2)}\n\n` +
+                    `_Salvo com sucesso no MariaDB!_`
+                );
+
+            } else {
+                // Se NÃO for gasto, ele só responde o que escreveu no campo de conversa, batendo papo
+                await msg.reply(analiseIA.respostaConversa || "Tô te ouvindo, Leo! Pode falar.");
+            }
 
         } catch (error) {
-            console.error('❌ Erro ao chamar a API do Gemini:', error);
-            await msg.reply('Ops, Leo! Deu um erro interno aqui na hora de processar com o Gemini. Dá uma olhada no terminal!');
+            console.error('❌ Erro no processamento interno:', error);
+            await msg.reply('Ops, Leo! Deu um erro aqui na hora de processar essa mensagem.');
         }
         
     } else {
-        // Ignora grupos, status ou curiosos de fora [cite: 53]
+        // Ignora grupos e outras pessoas por segurança
         console.log(`[Segurança]: Mensagem de ${msg.from} ignorada.`);
     }
 });
 
+// Inicializa o WhatsApp Web
 client.initialize();
