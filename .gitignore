@@ -1,0 +1,14 @@
+# Arquivo com as chaves secretas e tokens
+.env
+
+# Pasta de caches e sessões do WhatsApp Web
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Pasta gigante de dependências do Node.js (não deve ir ao Git)
+node_modules/
+
+# Logs de erros do sistema
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
