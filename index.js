@@ -313,6 +313,204 @@ async function gerarGraficoBarras(dadosAgrupados, titulo) {
     }
 }
 
+// 5. Gerar Gráfico de Linha (Tendência Mensal)
+async function gerarGraficoLinha(dadosMensais, titulo) {
+    console.log('📈 Gerando gráfico de linha...');
+    try {
+        const width = 800;
+        const height = 500;
+        const canvas = createCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+
+        const labels = dadosMensais.map(d => {
+            const [ano, mes] = d.mes.split('-');
+            const nomeMes = new Date(ano, mes - 1).toLocaleString('pt-BR', { month: 'short' });
+            return `${nomeMes}/${ano.slice(2)}`;
+        });
+        const valores = dadosMensais.map(d => Number(d.total));
+
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Total Gasto (R$)',
+                    data: valores,
+                    borderColor: '#2196F3',
+                    backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                    borderWidth: 3,
+                    fill: true,
+                    tension: 0.4,
+                    pointBackgroundColor: '#FF5722',
+                    pointBorderColor: '#FFFFFF',
+                    pointBorderWidth: 2,
+                    pointRadius: 5
+                }]
+            },
+            options: {
+                responsive: false,
+                animation: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: titulo,
+                        font: { size: 20, weight: 'bold' },
+                        padding: 20
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { callback: (value) => `R$ ${value}` }
+                    }
+                }
+            }
+        });
+
+        const buffer = canvas.toBuffer('image/png');
+        chart.destroy();
+        console.log('✅ Gráfico de linha gerado!');
+        return buffer;
+    } catch (error) {
+        console.error('❌ Erro ao gerar gráfico de linha:', error);
+        throw error;
+    }
+}
+
+// 🆕 Função principal do Dashboard (AGORA ACEITA MÊS E ANO)
+async function gerarDashboard(whatsappId, mesEspecifico = null, anoEspecifico = null) {
+    try {
+        const agora = new Date();
+        const mesAlvo = mesEspecifico || (agora.getMonth() + 1);
+        const anoAlvo = anoEspecifico || agora.getFullYear();
+        
+        // Mês anterior para comparação
+        let mesComparacao, anoComparacao;
+        if (mesEspecifico) {
+            // Se pediu um mês específico, compara com o mês anterior a esse
+            mesComparacao = mesAlvo === 1 ? 12 : mesAlvo - 1;
+            anoComparacao = mesAlvo === 1 ? anoAlvo - 1 : anoAlvo;
+        } else {
+            mesComparacao = agora.getMonth();
+            anoComparacao = mesComparacao === 0 ? agora.getFullYear() - 1 : agora.getFullYear();
+            mesComparacao = mesComparacao === 0 ? 12 : mesComparacao;
+        }
+        
+        console.log(`📊 Gerando Dashboard para ${mesAlvo}/${anoAlvo}...`);
+        
+        // Buscar dados
+        const totalMes = await db.puxarTotalMes(whatsappId, mesAlvo, anoAlvo);
+        const totalComparacao = await db.puxarTotalMes(whatsappId, mesComparacao, anoComparacao);
+        const topCategorias = await db.puxarTopCategoriasMes(whatsappId, mesAlvo, anoAlvo);
+        const mediaAtual = await db.puxarMediaDiariaMes(whatsappId, mesAlvo, anoAlvo);
+        const mediaComparacao = await db.puxarMediaDiariaMes(whatsappId, mesComparacao, anoComparacao);
+        const diasDoMes = db.puxarDiasDoMes(mesAlvo, anoAlvo);
+        const historicoMensal = await db.puxarHistoricoMensal(whatsappId, 6);
+
+        // Calcular variações
+        const variacaoTotal = totalComparacao > 0 
+            ? ((totalMes - totalComparacao) / totalComparacao) * 100 
+            : 0;
+        
+        const variacaoMedia = mediaComparacao.mediaDiaria > 0 
+            ? ((mediaAtual.mediaDiaria - mediaComparacao.mediaDiaria) / mediaComparacao.mediaDiaria) * 100 
+            : 0;
+
+        // Nomes dos meses
+        const nomeMesAlvo = new Date(anoAlvo, mesAlvo - 1).toLocaleString('pt-BR', { month: 'long' });
+        const nomeMesComparacao = new Date(anoComparacao, mesComparacao - 1).toLocaleString('pt-BR', { month: 'long' });
+
+        // Construir mensagem do dashboard
+        let dashboardMsg = `📊 *DASHBOARD FINANCEIRO*\n`;
+        dashboardMsg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        // Seção 1: Total do Mês
+        dashboardMsg += `💰 *Total Gasto - ${nomeMesAlvo}/${anoAlvo}*\n`;
+        dashboardMsg += `R$ ${Number(totalMes).toFixed(2)}\n`;
+        
+        if (totalComparacao > 0) {
+            const seta = variacaoTotal > 0 ? '📈' : '📉';
+            const emojiAlerta = variacaoTotal > 20 ? '🔴' : variacaoTotal > 10 ? '🟡' : '🟢';
+            dashboardMsg += `${emojiAlerta} ${seta} ${Math.abs(variacaoTotal).toFixed(1)}% ${variacaoTotal > 0 ? 'a mais' : 'a menos'} que ${nomeMesComparacao}\n`;
+            
+            if (variacaoTotal > 20) {
+                dashboardMsg += `🚨 *Alerta:* Seus gastos aumentaram mais de 20%!\n`;
+            }
+        } else {
+            dashboardMsg += `🆕 Primeiro mês com gastos registrados\n`;
+        }
+        
+        dashboardMsg += `\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        // Seção 2: Média Diária
+        dashboardMsg += `📅 *Média Diária*\n`;
+        dashboardMsg += `R$ ${Number(mediaAtual.mediaDiaria).toFixed(2)}/dia\n`;
+        dashboardMsg += `Dias com gastos: ${mediaAtual.diasComGasto} de ${diasDoMes} dias\n`;
+        
+        if (mediaComparacao.mediaDiaria > 0 && variacaoMedia !== 0) {
+            const seta = variacaoMedia > 0 ? '📈' : '📉';
+            dashboardMsg += `${seta} ${Math.abs(variacaoMedia).toFixed(1)}% vs ${nomeMesComparacao}\n`;
+        }
+        
+        dashboardMsg += `\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        // Seção 3: Top 3 Categorias
+        if (topCategorias.length > 0) {
+            dashboardMsg += `🏆 *Top 3 Categorias*\n`;
+            const emojis = ['🥇', '🥈', '🥉'];
+            topCategorias.forEach((cat, index) => {
+                const percent = Number(totalMes) > 0 ? (Number(cat.total) / Number(totalMes)) * 100 : 0;
+                dashboardMsg += `${emojis[index]} ${cat.tipo}: R$ ${Number(cat.total).toFixed(2)} (${percent.toFixed(1)}%)\n`;
+            });
+        } else {
+            dashboardMsg += `📭 Nenhum gasto registrado esse mês\n`;
+        }
+        
+        dashboardMsg += `\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        // Seção 4: Tendência
+        if (historicoMensal.length > 1) {
+            dashboardMsg += `📈 *Tendência (Últimos ${historicoMensal.length} meses)*\n`;
+            const ultimo = historicoMensal[historicoMensal.length - 1];
+            const penultimo = historicoMensal[historicoMensal.length - 2];
+            const variacaoTendencia = Number(penultimo.total) > 0 
+                ? ((Number(ultimo.total) - Number(penultimo.total)) / Number(penultimo.total)) * 100
+                : 0;
+            
+            const tendencia = variacaoTendencia > 5 ? 'subindo muito 📈' 
+                : variacaoTendencia > 0 ? 'subindo levemente ↗️'
+                : variacaoTendencia < -5 ? 'caindo bastante 📉'
+                : 'estável ➡️';
+            
+            dashboardMsg += `Seus gastos estão ${tendencia}\n`;
+        }
+
+        dashboardMsg += `\n━━━━━━━━━━━━━━━━━━━━━\n`;
+        dashboardMsg += `💡 _Dica: Use "gráfico de tendência" para ver o histórico visual_`;
+
+        return {
+            mensagem: dashboardMsg,
+            dados: {
+                mesAlvo,
+                anoAlvo,
+                nomeMesAlvo,
+                totalMes,
+                totalComparacao,
+                variacaoTotal,
+                mediaAtual,
+                mediaComparacao,
+                variacaoMedia,
+                topCategorias,
+                historicoMensal
+            }
+        };
+        
+    } catch (error) {
+        console.error('❌ Erro ao gerar dashboard:', error);
+        throw error;
+    }
+}
+
 // ========== INICIALIZAÇÃO DO CLIENT ==========
 
 client.on('qr', (qr) => {
@@ -321,13 +519,13 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', () => {
-    console.log('🚀 Assistente de gastos com relatórios (Excel/PDF/Gráficos) ONLINE!');
-    console.log('📊 Funcionalidades disponíveis:');
-    console.log('   - Registrar gastos');
-    console.log('   - Consultar relatórios (texto)');
-    console.log('   - Gerar planilhas Excel');
-    console.log('   - Gerar PDFs');
-    console.log('   - Gerar gráficos (pizza e barras)');
+    console.log('🚀 Assistente de gastos com Dashboard ONLINE!');
+    console.log('📊 Comandos disponíveis:');
+    console.log('   - "resumo" → Dashboard do mês atual');
+    console.log('   - "resumo de maio" → Dashboard de um mês específico');
+    console.log('   - "dashboard de abril 2026" → Dashboard específico');
+    console.log('   - "apagar pizza 50" → Deletar gasto específico');
+    console.log('   - "apagar tudo" → Limpar todos os gastos');
 });
 
 client.on('message', async (msg) => {
@@ -351,20 +549,26 @@ client.on('message', async (msg) => {
                 "   - nome: o local do gasto (em minúsculas).\n" +
                 "   - tipo: a categoria MAIS ADEQUADA (use termos como 'saude', 'alimentacao', 'transporte', 'lazer', 'mercado', 'moradia'). Se não for nenhuma dessas, crie uma categoria lógica nova.\n" +
                 "   - valor: o valor numérico.\n" +
-                "   - data: se o usuário mencionou uma data específica (ex: 'dia 27/05', '27/05', '27 de maio'), converta-a para o formato 'YYYY-MM-DD'. O ano atual é 2026. Se não houver ano na mensagem, use 2026. Se houver ano explícito (ex: '27/05/2025'), respeite-o. Se não houver data na mensagem, retorne null.\n" +
+                "   - data: se o usuário mencionou uma data específica (ex: 'dia 27/05', '27/05', '27 de maio'), converta-a para o formato 'YYYY-MM-DD'. O ano atual é 2026. Se não houver ano na mensagem, use 2026. Se não houver data na mensagem, retorne null.\n" +
                 "2. Se ele quer CONSULTAR relatórios: defina 'eConsulta' como true e extraia opcionalmente:\n" +
                 "   - categoriaConsulta: a categoria que ele quer filtrar (ou null/'todos' para todas).\n" +
-                "   - mesConsulta: número do mês (1 a 12) se ele mencionar um mês específico (ex: 'abril', 'mês 4', 'relatório de maio', 'mês passado', 'último mês'). Se ele falar 'mês passado', 'último mês', 'mês anterior', calcule o mês anterior ao atual (atual é 6/junho, então mês passado é 5/maio). Se não mencionar mês, retorne null.\n" +
-                "   - anoConsulta: ano do mês (ex: 2026). Se não mencionar ano, assuma o ano atual 2026. Se ele falar 'mês passado' e o mês atual for janeiro, o ano deve ser 2025. Se não houver mês, retorne null.\n" +
-                "   - gerarExcel: true se ele pedir planilha, Excel, 'xls', 'arquivo Excel' ou 'documento Excel'.\n" +
-                "   - gerarPDF: true se ele pedir PDF, 'documento PDF' ou 'arquivo PDF'.\n" +
-                "   - gerarGrafico: true se ele pedir gráfico, imagem, 'visual', 'gráfico de pizza', 'gráfico de barras', 'dashboard' ou 'visualização'.\n" +
-                "   - tipoGrafico: 'pizza' se pedir gráfico de pizza/torta, 'barras' se pedir gráfico de barras/colunas. Padrão: 'pizza'.\n" +
-                "3. Se ele quer APAGAR um gasto específico: defina 'eExclusao' como true e extraia nome e valor.\n" +
-                "4. Se ele quer APAGAR TODOS os gastos: defina 'eExclusaoTotal' como true.\n" +
-                "5. Se for conversa normal: defina TODOS os booleanos como false e preencha 'respostaConversa'.\n" +
-                "Importante: Farmácia é 'saude'. Padaria é 'alimentacao'. Posto de gasolina é 'transporte'.\n" +
-                "Responda APENAS com um objeto JSON contendo: eGasto, eConsulta, eExclusao, eExclusaoTotal, nome, tipo, valor, data, categoriaConsulta, mesConsulta, anoConsulta, gerarExcel, gerarPDF, gerarGrafico, tipoGrafico, respostaConversa.";
+                "   - mesConsulta: número do mês (1 a 12) se ele mencionar um mês específico. Se falar 'mês passado', calcule o mês anterior ao atual.\n" +
+                "   - anoConsulta: ano do mês (ex: 2026). Se não mencionar ano, assuma 2026.\n" +
+                "   - gerarExcel: true se ele pedir planilha, Excel, 'xls'.\n" +
+                "   - gerarPDF: true se ele pedir PDF.\n" +
+                "   - gerarGrafico: true se ele pedir gráfico, imagem, 'visual', 'gráfico de pizza', 'gráfico de barras'.\n" +
+                "   - tipoGrafico: 'pizza' ou 'barras'. Padrão: 'pizza'.\n" +
+                "3. Se ele quer DASHBOARD/RESUMO: defina 'eDashboard' como true e extraia:\n" +
+                "   - mesDashboard: número do mês se ele especificar (ex: 'resumo de maio' → 5, 'dashboard de março' → 3). Se não especificar mês, retorne null para usar o mês atual.\n" +
+                "   - anoDashboard: ano se ele especificar (ex: 'resumo de 2025' → 2025). Se não especificar, retorne null para usar o ano atual.\n" +
+                "   Exemplos: 'resumo', 'dashboard', 'como estou de gastos', 'balanço', 'status financeiro', 'resumo de maio', 'dashboard de janeiro 2025'.\n" +
+                "4. Se ele quer APAGAR um gasto específico: defina 'eExclusao' como true e extraia nome e valor.\n" +
+                "   Exemplos: 'apagar pizza 50', 'deletar farmacia 30', 'remover uber 15', 'excluir mercado 200'.\n" +
+                "5. Se ele quer APAGAR TODOS os gastos: defina 'eExclusaoTotal' como true.\n" +
+                "   Exemplos: 'apagar tudo', 'limpar histórico', 'zerar gastos', 'deletar todos'.\n" +
+                "6. Se for conversa normal: defina TODOS os booleanos como false e preencha 'respostaConversa'.\n" +
+                "IMPORTANTE: Se a mensagem contiver palavras como 'apagar', 'deletar', 'remover', 'excluir' seguidas de um nome e valor, é exclusão (eExclusao = true), NÃO é registro de gasto!\n" +
+                "Responda APENAS com um objeto JSON contendo: eGasto, eConsulta, eDashboard, eExclusao, eExclusaoTotal, nome, tipo, valor, data, categoriaConsulta, mesConsulta, anoConsulta, gerarExcel, gerarPDF, gerarGrafico, tipoGrafico, mesDashboard, anoDashboard, respostaConversa.";
 
             console.log('[IA]: Enviando mensagem para análise...');
             const response = await openai.chat.completions.create({
@@ -416,7 +620,40 @@ client.on('message', async (msg) => {
                 );
             }
 
-            // 🔀 FLUXO 2: Consultar Relatório
+            // 🆕 FLUXO 2: Dashboard / Resumo (AGORA COM MÊS ESPECÍFICO)
+            else if (analiseIA.eDashboard) {
+                console.log('[Ação]: Gerando Dashboard...');
+                await chat.sendStateTyping();
+                
+                const mesAlvo = analiseIA.mesDashboard || null;
+                const anoAlvo = analiseIA.anoDashboard || null;
+                
+                console.log(`[Dashboard]: Mês=${mesAlvo || 'atual'}, Ano=${anoAlvo || 'atual'}`);
+                
+                const dashboard = await gerarDashboard(msg.from, mesAlvo, anoAlvo);
+                
+                // Verificar se pediu gráfico de tendência junto
+                if (analiseIA.gerarGrafico) {
+                    console.log('[Ação]: Gerando gráfico de tendência...');
+                    const graficoLinha = await gerarGraficoLinha(
+                        dashboard.dados.historicoMensal,
+                        'Evolução dos Gastos - Últimos 6 Meses'
+                    );
+                    
+                    const media = new MessageMedia(
+                        'image/png',
+                        graficoLinha.toString('base64'),
+                        'tendencia_gastos.png'
+                    );
+                    
+                    await chat.sendMessage(media);
+                }
+                
+                await msg.reply(dashboard.mensagem);
+                console.log('[Sucesso]: Dashboard enviado!');
+            }
+
+            // 🔀 FLUXO 3: Consultar Relatório
             else if (analiseIA.eConsulta) {
                 console.log('[Ação]: Gerando relatório...');
                 const categoria = analiseIA.categoriaConsulta || null;
@@ -522,29 +759,39 @@ client.on('message', async (msg) => {
                 await msg.reply(respostaFinalRelatorio.choices[0].message.content);
             }
 
-            // 🔀 FLUXO 3: Deletar Gasto Específico
+            // 🔀 FLUXO 4: Deletar Gasto Específico (CORRIGIDO)
             else if (analiseIA.eExclusao) {
-                const nomeAlvo = analiseIA.nome.toLowerCase().trim();
-                const linhasApagadas = await db.deletarGasto(msg.from, nomeAlvo, analiseIA.valor);
+                console.log('[Ação]: Deletando gasto...');
+                const nomeAlvo = analiseIA.nome ? analiseIA.nome.toLowerCase().trim() : '';
+                const valorAlvo = analiseIA.valor || 0;
+                
+                console.log(`[Exclusão]: Procurando "${nomeAlvo}" com valor R$ ${valorAlvo}`);
+                
+                const linhasApagadas = await db.deletarGasto(msg.from, nomeAlvo, valorAlvo);
 
                 if (linhasApagadas > 0) {
-                    await msg.reply(`🗑️ *Gasto Removido!*\n\nDeletei o gasto de *R$ ${Number(analiseIA.valor).toFixed(2)}* no *${nomeAlvo}*!`);
+                    await msg.reply(`🗑️ *Gasto Removido!*\n\nDeletei ${linhasApagadas} registro(s) de *${nomeAlvo}*!`);
+                    console.log(`[Sucesso]: ${linhasApagadas} gasto(s) deletado(s)`);
                 } else {
-                    await msg.reply(`📊 Não achei nenhum gasto de *R$ ${Number(analiseIA.valor).toFixed(2)}* no *${nomeAlvo}* para apagar.`);
+                    await msg.reply(`📊 Não encontrei nenhum gasto de *${nomeAlvo}* para apagar, Leo.\n\nVerifique se o nome está correto ou tente "apagar tudo" para ver todos os gastos.`);
+                    console.log('[Aviso]: Nenhum gasto encontrado para deletar');
                 }
             }
 
-            // 🔀 FLUXO 4: Deletar TODOS os gastos
+            // 🔀 FLUXO 5: Deletar TODOS os gastos
             else if (analiseIA.eExclusaoTotal) {
+                console.log('[Ação]: Deletando TODOS os gastos...');
                 const linhasApagadas = await db.deletarTodosGastos(msg.from);
                 if (linhasApagadas > 0) {
-                    await msg.reply(`🗑️ *Todos os gastos foram removidos!* ${linhasApagadas} registro(s) apagado(s).`);
+                    await msg.reply(`🗑️ *Todos os gastos foram removidos!*\n\n${linhasApagadas} registro(s) apagado(s) do banco de dados.`);
+                    console.log(`[Sucesso]: ${linhasApagadas} gastos deletados`);
                 } else {
                     await msg.reply(`📊 Não havia nenhum gasto registrado para apagar, Leo.`);
+                    console.log('[Aviso]: Banco já estava vazio');
                 }
             }
 
-            // 🔀 FLUXO 5: Conversa normal
+            // 🔀 FLUXO 6: Conversa normal
             else {
                 if (analiseIA.respostaConversa) {
                     await msg.reply(analiseIA.respostaConversa);
