@@ -3,7 +3,6 @@ const mysql = require('mysql2/promise');
 
 let pool;
 
-// Conexão e criação de tabelas (mantido como antes, com data_gasto)
 async function conectarBanco() {
     try {
         pool = mysql.createPool({
@@ -71,26 +70,55 @@ module.exports = {
         return result.insertId;
     },
 
-    // Função de consulta melhorada: aceita filtro de categoria e mês/ano, ordena do mais antigo para o mais novo
     puxarGastos: async (whatsappId, categoria = null, mes = null, ano = null) => {
         let sql = `SELECT nome, tipo, valor, DATE_FORMAT(data_gasto, '%d/%m/%Y') as data_formatada 
                    FROM gastos WHERE whatsapp_id = ?`;
         const params = [whatsappId];
 
-        // Filtro de categoria (opcional)
         if (categoria && categoria !== 'todos' && categoria !== '') {
             sql += ` AND tipo = ?`;
             params.push(categoria);
         }
 
-        // Filtro de mês/ano (opcional) – ex: mês=4, ano=2026
         if (mes && ano) {
             const primeiroDia = `${ano}-${String(mes).padStart(2, '0')}-01`;
             sql += ` AND data_gasto >= ? AND data_gasto <= LAST_DAY(?)`;
-            params.push(primeiroDia, primeiroDia); // primeiro parâmetro para >=, segundo para LAST_DAY
+            params.push(primeiroDia, primeiroDia);
         }
 
-        sql += ` ORDER BY data_gasto ASC, id ASC`;  // Mais antigo primeiro
+        sql += ` ORDER BY data_gasto ASC, id ASC`;
+        const [rows] = await pool.execute(sql, params);
+        return rows;
+    },
+
+    puxarGastosAgrupados: async (whatsappId, mes = null, ano = null) => {
+        let sql = `SELECT tipo, SUM(valor) as total 
+                   FROM gastos WHERE whatsapp_id = ?`;
+        const params = [whatsappId];
+
+        if (mes && ano) {
+            const primeiroDia = `${ano}-${String(mes).padStart(2, '0')}-01`;
+            sql += ` AND data_gasto >= ? AND data_gasto <= LAST_DAY(?)`;
+            params.push(primeiroDia, primeiroDia);
+        }
+
+        sql += ` GROUP BY tipo ORDER BY total DESC`;
+        const [rows] = await pool.execute(sql, params);
+        return rows;
+    },
+
+    puxarGastosDiarios: async (whatsappId, mes = null, ano = null) => {
+        let sql = `SELECT data_gasto as dia, SUM(valor) as total 
+                   FROM gastos WHERE whatsapp_id = ?`;
+        const params = [whatsappId];
+
+        if (mes && ano) {
+            const primeiroDia = `${ano}-${String(mes).padStart(2, '0')}-01`;
+            sql += ` AND data_gasto >= ? AND data_gasto <= LAST_DAY(?)`;
+            params.push(primeiroDia, primeiroDia);
+        }
+
+        sql += ` GROUP BY data_gasto ORDER BY data_gasto ASC`;
         const [rows] = await pool.execute(sql, params);
         return rows;
     },
